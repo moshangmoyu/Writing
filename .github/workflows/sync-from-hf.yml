@@ -1,0 +1,51 @@
+name: Sync From Hugging Face to GitHub
+on:
+  workflow_dispatch: # 建议手动触发，确保安全可控
+  # 如果你需要定时同步，可以取消注释下面这行（例如每6小时一次）：
+  # schedule:
+  #   - cron: '0 */6 * * *'
+
+jobs:
+  sync-hf-to-github:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 需要向 GitHub 仓库写入的权限
+
+    steps:
+      - name: Checkout GitHub Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 获取完整历史，便于 rebase
+
+      - name: Configure Git and Set Environment Variables
+        run: |
+          git config --global user.email "action@github.com"
+          git config --global user.name "GitHub Action"
+          # 构造带认证的 Hugging Face 仓库 URL
+          echo "HF_REPO_URL_AUTH=https://${{ secrets.HF_USERNAME }}:${{ secrets.HF_TOKEN }}@huggingface.co/spaces/${{ secrets.HF_USERNAME }}/${{ secrets.HF_SPACE_NAME }}" >> $GITHUB_ENV
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_USERNAME: ${{ secrets.HF_USERNAME }}
+          HF_SPACE_NAME: ${{ secrets.HF_SPACE_NAME }}
+
+      - name: Pull Changes from Hugging Face
+        run: |
+          # 浅克隆 Hugging Face 仓库到临时目录
+          git clone --depth 1 $HF_REPO_URL_AUTH hf_temp
+          # 将克隆的内容（排除 .git 目录）移动到当前 GitHub 工作区
+          find hf_temp/ -maxdepth 1 -mindepth 1 -not -name '.git' -exec mv {} . \;
+          # 删除临时克隆目录
+          rm -rf hf_temp
+
+      - name: Commit and Push to GitHub
+        run: |
+          if ! git diff --quiet; then
+            echo "Changes detected. Committing and pushing to GitHub."
+            git add .
+            git commit -m "Sync: Content pulled from Hugging Face Space"
+            # 使用 rebase 整合 GitHub 上可能的并发更改
+            git pull --rebase origin main
+            git push origin main
+          else
+            echo "No new changes from Hugging Face. Skipping commit."
+          fi
